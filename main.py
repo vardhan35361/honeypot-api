@@ -28,33 +28,31 @@ HELPER_REPLIES = [
 
 sessions = {}
 
-
-def safe_success():
+@app.get("/")
+async def health():
     return {"status": "success"}
 
+@app.post("/honeypot")
+async def honeypot(request: Request, x_api_key: Optional[str] = Header(None)):
 
-async def process(request: Request, x_api_key: Optional[str]):
-    # API Key check (only if provided)
+    # Allow missing API key (tester sometimes skips it)
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-    # Safe JSON parsing
     try:
         data = await request.json()
-        if not isinstance(data, dict):
-            data = {}
-    except Exception:
+    except:
         data = {}
 
-    session_id = data.get("sessionId", "tester-session")
+    session_id = data.get("sessionId", "default-session")
     message = data.get("message", {})
     text = str(message.get("text", "")).lower()
 
     if session_id not in sessions:
-        sessions[session_id] = {"count": 0}
+        sessions[session_id] = 0
 
-    sessions[session_id]["count"] += 1
-    count = sessions[session_id]["count"]
+    sessions[session_id] += 1
+    count = sessions[session_id]
 
     scam = any(keyword in text for keyword in SCAM_KEYWORDS)
 
@@ -67,29 +65,5 @@ async def process(request: Request, x_api_key: Optional[str]):
 
     return {
         "status": "success",
-        "scamDetected": scam,
-        "messageCount": count,
         "reply": reply
     }
-
-
-# GET endpoints (health check for Render)
-@app.get("/")
-async def root_get():
-    return safe_success()
-
-
-@app.get("/honeypot")
-async def honeypot_get():
-    return safe_success()
-
-
-# POST endpoints
-@app.post("/")
-async def root_post(request: Request, x_api_key: Optional[str] = Header(None)):
-    return await process(request, x_api_key)
-
-
-@app.post("/honeypot")
-async def honeypot_post(request: Request, x_api_key: Optional[str] = Header(None)):
-    return await process(request, x_api_key)
