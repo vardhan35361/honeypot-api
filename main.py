@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel
 from typing import Optional
 import os
 import random
@@ -28,25 +29,29 @@ HELPER_REPLIES = [
 
 sessions = {}
 
+# 🔥 Define exact request structure
+class Message(BaseModel):
+    text: str
+
+class HoneypotRequest(BaseModel):
+    sessionId: str
+    message: Message
+
 @app.get("/")
 async def health():
     return {"status": "success"}
 
 @app.post("/honeypot")
-async def honeypot(request: Request, x_api_key: Optional[str] = Header(None)):
+async def honeypot(
+    payload: HoneypotRequest,
+    x_api_key: Optional[str] = Header(None)
+):
 
-    # Allow missing API key (tester sometimes skips it)
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-    try:
-        data = await request.json()
-    except:
-        data = {}
-
-    session_id = data.get("sessionId", "default-session")
-    message = data.get("message", {})
-    text = str(message.get("text", "")).lower()
+    session_id = payload.sessionId
+    text = payload.message.text.lower()
 
     if session_id not in sessions:
         sessions[session_id] = 0
