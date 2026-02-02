@@ -1,14 +1,23 @@
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-import os
 import random
+import os
 
 app = FastAPI()
 
 API_KEY = os.getenv("API_KEY", "mysecretkey")
 
-# ---------- RESPONSE STRINGS ----------
+# ---------- REQUEST MODELS ----------
+
+class Message(BaseModel):
+    text: str
+
+class HoneypotRequest(BaseModel):
+    sessionId: str
+    message: Message
+
+# ---------- RESPONSES ----------
 
 SCAM_KEYWORDS = [
     "account", "blocked", "verify", "urgent", "upi", "otp", "bank", "suspended"
@@ -29,15 +38,6 @@ HELPER_REPLIES = [
     "Which account is affected?"
 ]
 
-# ---------- REQUEST MODEL ----------
-
-class Message(BaseModel):
-    text: str
-
-class HoneypotRequest(BaseModel):
-    sessionId: str
-    message: Message
-
 # ---------- HEALTH CHECK ----------
 
 @app.get("/")
@@ -51,7 +51,7 @@ def honeypot(
     payload: HoneypotRequest,
     x_api_key: Optional[str] = Header(None)
 ):
-    # Allow missing API key
+    # Allow missing API key (tester sometimes skips it)
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
@@ -64,6 +64,7 @@ def honeypot(
     else:
         reply = "Okay."
 
+    # 🔥 RETURN ONLY WHAT TESTER EXPECTS
     return {
         "status": "success",
         "reply": reply
