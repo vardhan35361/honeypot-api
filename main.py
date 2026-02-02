@@ -8,17 +8,12 @@ app = FastAPI()
 
 API_KEY = os.getenv("API_KEY", "mysecretkey")
 
-# ---------- REQUEST MODELS ----------
-
-class Message(BaseModel):
-    text: str
-
+# ---------- REQUEST MODEL ----------
 class HoneypotRequest(BaseModel):
     sessionId: str
-    message: Message
+    message: str   # 🔥 message is STRING, not object
 
-# ---------- RESPONSES ----------
-
+# ---------- SCAM DATA ----------
 SCAM_KEYWORDS = [
     "account", "blocked", "verify", "urgent", "upi", "otp", "bank", "suspended"
 ]
@@ -26,36 +21,25 @@ SCAM_KEYWORDS = [
 CONFUSED_REPLIES = [
     "What is this message?",
     "I don’t understand this.",
-    "Why am I getting this?",
-    "What happened to my account?",
-    "This is confusing."
+    "Why am I getting this?"
 ]
 
-HELPER_REPLIES = [
-    "Which bank is this?",
-    "Why is this urgent?",
-    "Can you explain properly?",
-    "Which account is affected?"
-]
-
-# ---------- HEALTH CHECK ----------
-
+# ---------- HEALTH ----------
 @app.get("/")
 def health():
     return {"status": "success"}
 
 # ---------- MAIN ENDPOINT ----------
-
 @app.post("/honeypot")
 def honeypot(
     payload: HoneypotRequest,
     x_api_key: Optional[str] = Header(None)
 ):
-    # Allow missing API key (tester sometimes skips it)
+
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-    text = payload.message.text.lower()
+    text = payload.message.lower()
 
     scam = any(keyword in text for keyword in SCAM_KEYWORDS)
 
@@ -64,7 +48,6 @@ def honeypot(
     else:
         reply = "Okay."
 
-    # 🔥 RETURN ONLY WHAT TESTER EXPECTS
     return {
         "status": "success",
         "reply": reply
