@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 import os
 import random
 
@@ -20,49 +21,51 @@ async def health_check():
 
 @app.post("/")
 @app.post("/honeypot")
-async def handle_request(request: Request, x_api_key: str = Header(None)):
-    # 1. API Key Check (Only if provided)
+async def handle_all_posts(request: Request, x_api_key: str = Header(None)):
+    # 1. Auth Check
     if x_api_key and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
+        return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
 
-    # 2. Ultra-Robust Body Extraction
-    # We use a try-except block to ensure we NEVER return a 422 or 500 error
+    # 2. The "Safety Net" for Request Body
+    data = {}
     try:
-        body = await request.json()
-    except:
-        body = {}
+        # Check if the body exists before parsing
+        body_bytes = await request.body()
+        if body_bytes:
+            data = await request.json()
+    except Exception:
+        # If the body is empty or not JSON, we just use an empty dict
+        data = {}
 
-    # Ensure body is a dictionary
-    if not isinstance(body, dict):
-        body = {}
+    # Ensure data is actually a dictionary
+    if not isinstance(data, dict):
+        data = {}
 
-    # 3. Extract Session ID
-    session_id = str(body.get("sessionId", "tester-session"))
-
-    # 4. Extract Message Text (Handle both String and Dict styles)
-    # This handles: {"message": "text"} AND {"message": {"text": "text"}}
-    raw_message = body.get("message", "")
-    if isinstance(raw_message, dict):
-        message_text = str(raw_message.get("text", "")).lower()
+    # 3. Safe Extraction (Handles sessionId/session_id/message/message.text)
+    session_id = str(data.get("sessionId", data.get("session_id", "tester-session")))
+    
+    raw_msg = data.get("message", "")
+    if isinstance(raw_msg, dict):
+        text = str(raw_msg.get("text", "")).lower()
     else:
-        message_text = str(raw_message).lower()
+        text = str(raw_msg).lower()
 
-    # 5. Logic
+    # 4. Logic & Session Management
     if session_id not in sessions:
         sessions[session_id] = 0
     
     sessions[session_id] += 1
     count = sessions[session_id]
-    
-    is_scam = any(k in message_text for k in SCAM_KEYWORDS) if message_text else False
 
-    # Determine Reply
+    # Scam Logic
+    is_scam = any(k in text for k in SCAM_KEYWORDS) if text else False
+
     if is_scam:
         reply = random.choice(CONFUSED_REPLIES) if count < 3 else random.choice(HELPER_REPLIES)
     else:
         reply = "Okay."
 
-    # 6. Final Response (Matches expected Honeypot format)
+    # 5. Guaranteed JSON Response
     return {
         "status": "success",
         "scamDetected": is_scam,
