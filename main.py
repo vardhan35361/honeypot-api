@@ -2,76 +2,75 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 import os
 import random
+import json
 
 app = FastAPI()
 
-# Configuration
+# 1. Configuration
 API_KEY = os.getenv("API_KEY", "mysecretkey")
 SCAM_KEYWORDS = ["account", "blocked", "verify", "urgent", "upi", "otp", "bank", "suspended"]
 CONFUSED_REPLIES = ["What is this message?", "I don’t understand this.", "Why am I getting this?"]
 HELPER_REPLIES = ["Which bank is this?", "Why is this urgent?", "Can you explain properly?"]
 
-# In-memory session store
+# 2. Persistence (In-memory)
 sessions = {}
 
 @app.get("/")
 @app.get("/honeypot")
-async def health_check():
+async def health():
     return {"status": "success"}
 
 @app.post("/")
 @app.post("/honeypot")
-async def handle_honeypot(request: Request, x_api_key: str = Header(None)):
-    # 1. API Key Check
+async def process_all(request: Request, x_api_key: str = Header(None)):
+    # --- STEP 1: KEY VALIDATION ---
     if x_api_key and x_api_key != API_KEY:
         return JSONResponse(status_code=401, content={"detail": "Invalid API Key"})
 
-    # 2. Ultra-Safe Body Parsing (The "Invincible" Part)
+    # --- STEP 2: MANUAL BODY PARSING (The Fix) ---
     data = {}
     try:
-        # Read raw bytes first to avoid crash on empty body
-        body_bytes = await request.body()
-        if body_bytes:
-            # Manually try to parse JSON
-            data = await request.json()
+        # We read the raw bytes. This works even if the body is empty or missing.
+        raw_body = await request.body()
+        if raw_body:
+            data = json.loads(raw_body)
     except:
-        # If body is empty or not JSON, just act like it's empty
+        # If parsing fails, we use an empty dict. No error is thrown.
         data = {}
 
-    # Force data to be a dict if it parsed as a list/string
     if not isinstance(data, dict):
         data = {}
 
-    # 3. Extract Session and Message safely
-    # Check for camelCase 'sessionId' and snake_case 'session_id'
-    session_id = str(data.get("sessionId", data.get("session_id", "tester-session")))
+    # --- STEP 3: DATA EXTRACTION ---
+    # Handle both 'sessionId' and 'session_id'
+    sid = str(data.get("sessionId", data.get("session_id", "tester-session")))
     
-    raw_message = data.get("message", "")
-    message_text = ""
-
-    if isinstance(raw_message, dict):
-        message_text = str(raw_message.get("text", "")).lower()
+    # Handle 'message' as a string OR as an object {"text": "..."}
+    raw_msg = data.get("message", "")
+    text = ""
+    if isinstance(raw_msg, dict):
+        text = str(raw_msg.get("text", "")).lower()
     else:
-        message_text = str(raw_message).lower()
+        text = str(raw_msg).lower()
 
-    # 4. Session Counter
-    if session_id not in sessions:
-        sessions[session_id] = 0
-    sessions[session_id] += 1
-    count = sessions[session_id]
+    # --- STEP 4: SESSION & SCAM LOGIC ---
+    if sid not in sessions:
+        sessions[sid] = 0
+    sessions[sid] += 1
+    count = sessions[sid]
 
-    # 5. Scam Detection Logic
-    scam = any(k in message_text for k in SCAM_KEYWORDS) if message_text else False
+    is_scam = any(k in text for k in SCAM_KEYWORDS) if text else False
 
-    if scam:
+    # Logic for replies
+    if is_scam:
         reply = random.choice(CONFUSED_REPLIES) if count < 3 else random.choice(HELPER_REPLIES)
     else:
         reply = "Okay."
 
-    # 6. Final JSON Response
+    # --- STEP 5: FINAL RESPONSE ---
     return {
         "status": "success",
-        "scamDetected": scam,
-        "messageCount": count,
-        "reply": reply
+        "scamDetected": bool(is_scam),
+        "messageCount": int(count),
+        "reply": str(reply)
     }
