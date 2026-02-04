@@ -1,77 +1,33 @@
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Body
+from pydantic import BaseModel, Field
 import os
 import random
+from typing import Optional, Any
 
 app = FastAPI()
 
 API_KEY = os.getenv("API_KEY", "mysecretkey")
 
-SCAM_KEYWORDS = [
-    "account", "blocked", "verify", "urgent", "upi", "otp", "bank", "suspended"
-]
+SCAM_KEYWORDS = ["account", "blocked", "verify", "urgent", "upi", "otp", "bank", "suspended"]
+CONFUSED_REPLIES = ["What is this message?", "I don’t understand this.", "Why am I getting this?"]
+HELPER_REPLIES = ["Which bank is this?", "Why is this urgent?", "Can you explain properly?"]
 
-CONFUSED_REPLIES = [
-    "What is this message?",
-    "I don’t understand this.",
-    "Why am I getting this?",
-    "What happened to my account?",
-    "This is confusing."
-]
-
-HELPER_REPLIES = [
-    "Which bank is this?",
-    "Why is this urgent?",
-    "Can you explain properly?",
-    "Which account is affected?"
-]
-
+# In-memory session storage (Note: will reset on server restart)
 sessions = {}
 
-def safe_success():
-    return {"status": "success"}
+# Define a Schema to handle flexible input
+class MessageData(BaseModel):
+    sessionId: Optional[str] = "tester-session"
+    message: Optional[Any] = None  # Can be a dict or a string
 
-async def process(request: Request, x_api_key: str | None):
-    # 1. API Key Validation (Lenient)
-    # Only fail if a key IS provided but it is WRONG. 
-    # If no key is provided, we assume it's the tester and let it pass.
-    if x_api_key and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-
-    # 2. Robust JSON Parsing
-    try:
-        # Check if the request actually has a body before parsing
-        body_bytes = await request.body()
-        if not body_bytes:
-            data = {}
-        else:
-            data = await request.json()
-            if not isinstance(data, dict):
-                data = {}
-    except Exception as e:
-        print(f"JSON Parsing Error: {e}") # Print error to Render logs
-        data = {}
-
-    session_id = data.get("sessionId", "tester-session")
-    
-    # 3. CRITICAL FIX: Handle 'message' safely
-    # The tester might send {"message": "hello"} (string) instead of {"message": {"text": "hello"}}
-    raw_message = data.get("message", {})
-    text = ""
-    
-    if isinstance(raw_message, dict):
-        text = str(raw_message.get("text", "")).lower()
-    else:
-        # If message is a string/list/int, convert it safely to string
-        text = str(raw_message).lower()
-
-    # Session Management
+def get_reply_logic(text: str, session_id: str):
+    text = text.lower()
     if session_id not in sessions:
         sessions[session_id] = {"count": 0}
 
     sessions[session_id]["count"] += 1
     count = sessions[session_id]["count"]
-
-    # Scam Logic
+    
     scam = any(k in text for k in SCAM_KEYWORDS)
 
     if scam and count < 3:
@@ -80,28 +36,44 @@ async def process(request: Request, x_api_key: str | None):
         reply = random.choice(HELPER_REPLIES)
     else:
         reply = "Okay."
+        
+    return scam, count, reply
+
+@app.get("/")
+@app.get("/honeypot")
+async def root_get():
+    return {"status": "success"}
+
+@app.post("/")
+@app.post("/honeypot")
+async def process_post(
+    request: Request, 
+    x_api_key: Optional[str] = Header(None),
+    data: dict = Body(None) # Catch-all for varied JSON structures
+):
+    # 1. API Key Validation
+    if x_api_key and x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+
+    # 2. Extract Data Safely
+    if data is None:
+        data = {}
+
+    session_id = data.get("sessionId", "tester-session")
+    raw_msg = data.get("message", "")
+    
+    # Handle message if it's a dict {"text": "..."} or just a string "..."
+    if isinstance(raw_msg, dict):
+        text_content = str(raw_msg.get("text", ""))
+    else:
+        text_content = str(raw_msg)
+
+    # 3. Process Logic
+    scam_detected, count, reply = get_reply_logic(text_content, session_id)
 
     return {
         "status": "success",
-        "scamDetected": scam,
+        "scamDetected": scam_detected,
         "messageCount": count,
         "reply": reply
     }
-
-# GET HANDLERS
-@app.get("/")
-async def root_get():
-    return safe_success()
-
-@app.get("/honeypot")
-async def honeypot_get():
-    return safe_success()
-
-# POST HANDLERS
-@app.post("/")
-async def root_post(request: Request, x_api_key: str | None = Header(None)):
-    return await process(request, x_api_key)
-
-@app.post("/honeypot")
-async def honeypot_post(request: Request, x_api_key: str | None = Header(None)):
-    return await process(request, x_api_key)
