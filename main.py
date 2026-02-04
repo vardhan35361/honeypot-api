@@ -1,8 +1,6 @@
-from fastapi import FastAPI, Header, HTTPException, Request, Body
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Header, HTTPException, Request
 import os
 import random
-from typing import Optional, Any
 
 app = FastAPI()
 
@@ -12,68 +10,72 @@ SCAM_KEYWORDS = ["account", "blocked", "verify", "urgent", "upi", "otp", "bank",
 CONFUSED_REPLIES = ["What is this message?", "I don’t understand this.", "Why am I getting this?"]
 HELPER_REPLIES = ["Which bank is this?", "Why is this urgent?", "Can you explain properly?"]
 
-# In-memory session storage (Note: will reset on server restart)
+# In-memory session store
 sessions = {}
 
-# Define a Schema to handle flexible input
-class MessageData(BaseModel):
-    sessionId: Optional[str] = "tester-session"
-    message: Optional[Any] = None  # Can be a dict or a string
-
-def get_reply_logic(text: str, session_id: str):
-    text = text.lower()
-    if session_id not in sessions:
-        sessions[session_id] = {"count": 0}
-
-    sessions[session_id]["count"] += 1
-    count = sessions[session_id]["count"]
-    
-    scam = any(k in text for k in SCAM_KEYWORDS)
-
-    if scam and count < 3:
-        reply = random.choice(CONFUSED_REPLIES)
-    elif scam:
-        reply = random.choice(HELPER_REPLIES)
-    else:
-        reply = "Okay."
-        
-    return scam, count, reply
-
-@app.get("/")
-@app.get("/honeypot")
-async def root_get():
-    return {"status": "success"}
-
-@app.post("/")
-@app.post("/honeypot")
-async def process_post(
-    request: Request, 
-    x_api_key: Optional[str] = Header(None),
-    data: dict = Body(None) # Catch-all for varied JSON structures
-):
+async def process(request: Request, x_api_key: str | None):
     # 1. API Key Validation
     if x_api_key and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-    # 2. Extract Data Safely
-    if data is None:
+    # 2. Ultra-Safe Body Parsing
+    data = {}
+    try:
+        # Check if there is any body content at all
+        body_bytes = await request.body()
+        if body_bytes:
+            data = await request.json()
+            # If data is not a dict (like a list or string), reset to empty dict
+            if not isinstance(data, dict):
+                data = {}
+    except Exception:
         data = {}
 
-    session_id = data.get("sessionId", "tester-session")
-    raw_msg = data.get("message", "")
+    # 3. Safely Extract Fields
+    # The tester might send 'sessionId' or 'session_id' or nothing
+    session_id = str(data.get("sessionId", data.get("session_id", "tester-session")))
     
-    # Handle message if it's a dict {"text": "..."} or just a string "..."
-    if isinstance(raw_msg, dict):
-        text_content = str(raw_msg.get("text", ""))
+    # 4. Robust Message Extraction
+    # Handles: {"message": "hello"}, {"message": {"text": "hello"}}, or missing message
+    raw_message = data.get("message", "")
+    text = ""
+    
+    if isinstance(raw_message, dict):
+        text = str(raw_message.get("text", "")).lower()
     else:
-        text_content = str(raw_msg)
+        text = str(raw_message).lower()
 
-    # 3. Process Logic
-    scam_detected, count, reply = get_reply_logic(text_content, session_id)
+    # 5. Session Counter Logic
+    if session_id not in sessions:
+        sessions[session_id] = {"count": 0}
+    
+    sessions[session_id]["count"] += 1
+    count = sessions[session_id]["count"]
+
+    # 6. Response Logic
+    scam = any(k in text for k in SCAM_KEYWORDS) if text else False
+
+    if scam:
+        reply = random.choice(CONFUSED_REPLIES) if count < 3 else random.choice(HELPER_REPLIES)
+    else:
+        reply = "Okay."
 
     return {
         "status": "success",
-        "scamDetected": scam_detected,
+        "scamDetected": scam,
         "messageCount": count,
         "reply": reply
     }
+
+@app.get("/")
+@app.get("/honeypot")
+async def health_check():
+    return {"status": "success"}
+
+@app.post("/")
+async def root_post(request: Request, x_api_key: str | None = Header(None)):
+    return await process(request, x_api_key)
+
+@app.post("/honeypot")
+async def honeypot_post(request: Request, x_api_key: str | None = Header(None)):
+    return await process(request, x_api_key)
